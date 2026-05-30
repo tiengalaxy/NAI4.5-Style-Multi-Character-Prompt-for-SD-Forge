@@ -1,3 +1,8 @@
+import os
+import re
+from contextlib import closing
+from pathlib import Path
+
 import torch
 import torch.nn.functional as F
 import gradio as gr
@@ -132,7 +137,6 @@ class MultiSubjectEngine:
 
     @staticmethod
     def _extract_extra_networks(text):
-        import re
         if not text:
             return [], text
         pattern = r'(<(?:lora|lyco|hypernet|embedding):[^>]+>)'
@@ -164,9 +168,10 @@ class MultiSubjectEngine:
         return body
 
     def setup_regional(self, prompts, env, ratios, base_ratio, feather_width, calc_mode):
+        _, clean_env = self._extract_extra_networks(env) if env else ([], "")
         self._regional_data = {
             "prompts": prompts,
-            "env": env,
+            "env": clean_env,
             "num_regions": len(prompts),
             "ratios": ratios,
             "base_ratio": base_ratio,
@@ -273,10 +278,11 @@ class MultiSubjectEngine:
         prompts = data["prompts"]
         env = data["env"]
         base_ratio = data["base_ratio"]
+        _, clean_env = self._extract_extra_networks(env) if env else ([], "")
         token_boundaries = []
         current_pos = 0
         for prompt in prompts:
-            full_prompt = f"{prompt} {env}" if env else prompt
+            full_prompt = f"{prompt} {clean_env}" if clean_env else prompt
             token_count = self._count_tokens(clip, full_prompt)
             token_boundaries.append((current_pos, current_pos + token_count))
             current_pos += token_count
@@ -461,7 +467,6 @@ def _render_region_preview(ratios, active_count=None):
 
 
 def _get_ad_model_list():
-    import os
     from pathlib import Path
     ad_dirs = []
     try:
@@ -506,7 +511,6 @@ def _get_ad_model_list():
 
 
 def _get_cn_models():
-    import os
     from pathlib import Path
     try:
         from controlnet_ext import get_cn_models
@@ -557,19 +561,24 @@ def _skip():
 
 
 def _on_generate_start():
-    return gr.Button(visible=False), gr.Button(visible=True), gr.Button(visible=True)
+    from gradio.components import Button
+    return Button(visible=False), Button(visible=True), Button(visible=True)
 
 
 def _on_generate_end():
-    return gr.Button(visible=True), gr.Button(visible=False), gr.Button(visible=False)
+    from gradio.components import Button
+    return Button(visible=True), Button(visible=False), Button(visible=False)
 
 
 def _build_ad_unit(d):
     unit_dict = {
         "ad_model": d.get("model", "face_yolov8n.pt"),
+        "ad_model_classes": d.get("model_classes", ""),
+        "ad_tab_enable": True,
         "ad_prompt": d.get("prompt", ""),
         "ad_negative_prompt": d.get("negative_prompt", ""),
         "ad_confidence": d.get("confidence", 0.3),
+        "ad_mask_filter_method": d.get("mask_filter_method", "Area"),
         "ad_mask_k_largest": d.get("mask_k_largest", 0),
         "ad_mask_min_ratio": d.get("mask_min_ratio", 0.0),
         "ad_mask_max_ratio": d.get("mask_max_ratio", 1.0),
@@ -588,8 +597,13 @@ def _build_ad_unit(d):
         "ad_steps": d.get("steps", 28),
         "ad_use_cfg_scale": d.get("use_cfg", False),
         "ad_cfg_scale": d.get("cfg_scale", 7.0),
+        "ad_use_checkpoint": False,
+        "ad_checkpoint": "Use same checkpoint",
+        "ad_use_vae": False,
+        "ad_vae": "Use same VAE",
         "ad_use_sampler": d.get("use_sampler", False),
         "ad_sampler": d.get("sampler", "DPM++ 2M Karras"),
+        "ad_scheduler": "Use same scheduler",
         "ad_use_noise_multiplier": d.get("use_noise_mult", False),
         "ad_noise_multiplier": d.get("noise_multiplier", 1.0),
         "ad_use_clip_skip": d.get("use_clip_skip", False),
@@ -657,7 +671,8 @@ def _setup_scripts(p, ad1=None, ad2=None):
         args = [None] * ad_num_args
         if ad1 and ad1.get("enable", False):
             args[0] = True
-            args[1] = _build_ad_unit(ad1)
+            if ad_num_args > 1:
+                args[1] = _build_ad_unit(ad1)
             num_models = getattr(shared.opts, 'ad_max_models', 2)
             for i in range(1, num_models):
                 idx = 1 + i
@@ -668,8 +683,8 @@ def _setup_scripts(p, ad1=None, ad2=None):
                         args[idx] = _build_ad_unit({"model": "None"})
         else:
             args[0] = False
-            if ad_num_args > 1:
-                args[1] = _build_ad_unit({"model": "None"})
+            for i in range(1, ad_num_args):
+                args[i] = _build_ad_unit({"model": "None"})
         p.script_args = args
     except Exception:
         pass
@@ -756,7 +771,6 @@ def _generate(
 
     outdir_samples = getattr(shared.opts, "outdir_samples", None) or getattr(shared.opts, "outdir_txt2img_samples", None) or getattr(shared.cmd_opts, "outdir_txt2img_samples", None) or getattr(shared.cmd_opts, "outdir_txt2img", None) or "outputs/txt2img-images"
     outdir_grids = getattr(shared.opts, "outdir_grids", None) or getattr(shared.opts, "outdir_txt2img_grids", None) or getattr(shared.cmd_opts, "outdir_txt2img_grids", None) or getattr(shared.cmd_opts, "outdir_grids", None) or "outputs/txt2img-grids"
-    import os
     os.makedirs(outdir_samples, exist_ok=True)
     os.makedirs(outdir_grids, exist_ok=True)
     p = StableDiffusionProcessingTxt2Img(
@@ -770,7 +784,7 @@ def _generate(
         cfg_scale=float(cfg_scale) if cfg_scale else 7.0,
         width=int(width) if width else 1024,
         height=int(height) if height else 1024,
-        seed=int(seed) if seed is not None and str(seed).strip() not in ("", "None") and int(seed) >= 0 else -1,
+        seed=int(float(seed)) if seed is not None and str(seed).strip() not in ("", "None") and int(float(seed)) >= 0 else -1,
         batch_size=int(batch_size) if batch_size else 1,
         do_not_save_grid=True,
         n_iter=1,
@@ -806,7 +820,6 @@ def _generate(
 
     _setup_scripts(p, ad1_params, ad2_params)
 
-    from contextlib import closing
     try:
         with closing(p):
             processed = process_images(p)
@@ -838,7 +851,7 @@ def _ad_ui_group(n):
     with gr.Tab(f"1st" if n == 1 else "2nd"):
         components[f'{prefix}_model'] = gr.Dropdown(
             label="Detection Model", choices=_get_ad_model_list(),
-            value="face_yolov8n.pt" if n == 1 else "None",
+            value=_get_ad_model_list()[0] if _get_ad_model_list() else "None" if n == 1 else "None",
             elem_id=f"nai_{prefix}_model",
         )
         components[f'{prefix}_prompt'] = gr.Textbox(
@@ -1100,7 +1113,7 @@ def _on_ui_tabs():
                         region_preview = gr.HTML(value=_render_region_preview([1.0, 1.0]), elem_id="nai_rprev")
 
                     def on_blend_change(mode):
-                        return gr.Group(visible=mode == "Regional Blend (Horizontal)")
+                        return gr.Column(visible=mode == "Regional Blend (Horizontal)")
 
                     blend_mode.change(
                         fn=on_blend_change,
@@ -1137,7 +1150,7 @@ def _on_ui_tabs():
                     skip_btn = gr.Button("Skip", visible=False, elem_id="nai_skip_btn")
 
                 preview_html = gr.HTML(
-                    value='<div id="nai_preview_container" style="display:none;text-align:center;padding:8px;"><img id="nai_preview_img" style="max-width:100%;border-radius:8px;" src=""/><p id="nai_preview_progress" style="color:#888;font-size:12px;margin-top:4px;"></p></div>',
+                    value='<div id="nai_preview_container" style="display:none;text-align:center;padding:8px"><img id="nai_preview_img" style="max-width:100%;border-radius:8px" src=""/><p id="nai_preview_progress" style="color:#888;font-size:12px;margin-top:4px"></p></div>',
                     elem_id="nai_preview_html",
                 )
 
