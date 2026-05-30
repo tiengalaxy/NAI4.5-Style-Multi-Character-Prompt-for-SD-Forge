@@ -445,29 +445,42 @@ def _render_region_preview(ratios, active_count=None):
     total = sum(ratios)
     if total <= 0:
         total = 1.0
-    width = 400
-    height = 60
+    svg_width = 400
+    svg_height = 60
     x = 0
     rects = []
     labels = []
     for i, ratio in enumerate(ratios):
-        w = (ratio / total) * width
+        w = (ratio / total) * svg_width
         color = REGION_COLORS[i] if i < len(REGION_COLORS) else "#888"
-        rects.append(f'<rect x="{x}" y="0" width="{w}" height="{height}" fill="{color}" opacity="0.6" rx="4"/>')
+        rects.append(f'<rect x="{x}" y="0" width="{w}" height="{svg_height}" fill="{color}" opacity="0.6" rx="4"/>')
         label_x = x + w / 2
         pct = ratio / total * 100
-        labels.append(f'<text x="{label_x}" y="{height/2+5}" text-anchor="middle" fill="white" font-size="12" font-weight="bold">R{i+1}: {pct:.0f}%</text>')
+        labels.append(f'<text x="{label_x}" y="{svg_height/2+5}" text-anchor="middle" fill="white" font-size="12" font-weight="bold">R{i+1}: {pct:.0f}%</text>')
         x += w
-    return f'<svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg" style="border-radius:8px;display:block;margin:8px auto;">{"".join(rects)}{"".join(labels)}</svg>'
+    return f'<svg width="{svg_width}" height="{svg_height}" xmlns="http://www.w3.org/2000/svg" style="border-radius:8px;display:block;margin:8px auto;">{"".join(rects)}{"".join(labels)}</svg>'
 
 
 def _generate(
-    char_prompts, char_weights, char_enableds, char_genders,
+    cp0, cp1, cp2, cp3,
+    cw0, cw1, cw2, cw3,
+    ce0, ce1, ce2, ce3,
+    cg0, cg1, cg2, cg3,
     main_env, negative_prompt, blend_mode,
     region_ratios, base_ratio, feather_width, calc_mode,
     width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-    lora_names, lora_weights, lora_enableds,
+    ln0, ln1, ln2, ln3,
+    lw0, lw1, lw2, lw3,
+    le0, le1, le2, le3,
 ):
+    char_prompts = [cp0, cp1, cp2, cp3]
+    char_weights = [cw0, cw1, cw2, cw3]
+    char_enableds = [ce0, ce1, ce2, ce3]
+    char_genders = [cg0, cg1, cg2, cg3]
+    lora_names = [ln0, ln1, ln2, ln3]
+    lora_weights = [lw0, lw1, lw2, lw3]
+    lora_enableds = [le0, le1, le2, le3]
+
     engine = MultiSubjectEngine.get()
     engine.cleanup()
 
@@ -553,13 +566,24 @@ def _generate(
     return images, info
 
 
+def _make_tag_append_fn(char_prompt_ref):
+    def _fn(tags, current):
+        if not tags:
+            return current
+        new_part = ", ".join(tags)
+        if current and current.strip():
+            return current.strip() + ", " + new_part
+        return new_part
+    return _fn
+
+
 def _on_ui_tabs():
     engine = MultiSubjectEngine.get()
 
     with gr.Blocks(analytics_enabled=False, elem_id="nai_multi_subject_tab") as tab:
         with gr.Row(elem_id="nai_main_row"):
             with gr.Column(scale=2, elem_id="nai_left_panel"):
-                with gr.Accordion("🎭 Characters", open=True, elem_id="nai_char_section"):
+                with gr.Accordion("Characters", open=True, elem_id="nai_char_section"):
                     char_prompts = []
                     char_weights = []
                     char_enableds = []
@@ -568,7 +592,7 @@ def _on_ui_tabs():
                     for i in range(4):
                         color = REGION_COLORS[i]
                         label = f"Character {i + 1}" if i < 2 else f"Character {i + 1} (Optional)"
-                        with gr.Accordion(f'<span style="color:{color}">■</span> {label}', open=(i < 2), elem_id=f"nai_char_acc_{i}"):
+                        with gr.Accordion(label, open=(i < 2), elem_id=f"nai_char_acc_{i}"):
                             with gr.Row():
                                 char_enabled = gr.Checkbox(label="Active", value=(i < 2), elem_id=f"nai_char_en_{i}")
                                 char_gender = gr.Radio(
@@ -585,7 +609,7 @@ def _on_ui_tabs():
                             )
                             char_weight = gr.Slider(label="Weight", minimum=0.1, maximum=2.0, step=0.05, value=1.0, elem_id=f"nai_char_w_{i}")
 
-                            with gr.Accordion("🏷️ Tag Picker", open=False, elem_id=f"nai_tag_pick_{i}"):
+                            with gr.Accordion("Tag Picker", open=False, elem_id=f"nai_tag_pick_{i}"):
                                 with gr.Tabs(elem_id=f"nai_tag_t_{i}"):
                                     for cat_key, cat_data in TAG_DB.items():
                                         with gr.Tab(f'{cat_data["icon"]} {cat_data["label"]}', elem_id=f"nai_tag_tab_{i}_{cat_key}"):
@@ -596,8 +620,8 @@ def _on_ui_tabs():
                                                 elem_id=f"nai_tag_dd_{i}_{cat_key}",
                                             )
                                             tag_dd.change(
-                                                fn=lambda tags: ", ".join(tags) if tags else "",
-                                                inputs=[tag_dd],
+                                                fn=_make_tag_append_fn(char_prompt),
+                                                inputs=[tag_dd, char_prompt],
                                                 outputs=[char_prompt],
                                             )
 
@@ -606,7 +630,7 @@ def _on_ui_tabs():
                             char_enableds.append(char_enabled)
                             char_genders.append(char_gender)
 
-                with gr.Accordion("🌍 Global", open=True, elem_id="nai_global_section"):
+                with gr.Accordion("Global", open=True, elem_id="nai_global_section"):
                     main_env = gr.Textbox(
                         label="Global Environment / Style",
                         placeholder="e.g., masterpiece, cinematic lighting, forest...",
@@ -623,7 +647,7 @@ def _on_ui_tabs():
                     )
 
             with gr.Column(scale=1, elem_id="nai_center_panel"):
-                with gr.Accordion("⚙️ Generation", open=True, elem_id="nai_gen_section"):
+                with gr.Accordion("Generation", open=True, elem_id="nai_gen_section"):
                     with gr.Row():
                         width = gr.Slider(label="Width", minimum=256, maximum=2048, step=64, value=1024, elem_id="nai_w")
                         height = gr.Slider(label="Height", minimum=256, maximum=2048, step=64, value=1024, elem_id="nai_h")
@@ -641,7 +665,7 @@ def _on_ui_tabs():
                         seed = gr.Number(label="Seed (-1 = random)", value=-1, elem_id="nai_seed")
                         batch_size = gr.Slider(label="Batch Size", minimum=1, maximum=8, step=1, value=1, elem_id="nai_batch")
 
-                with gr.Accordion("🔀 Blend Mode", open=True, elem_id="nai_blend_section"):
+                with gr.Accordion("Blend Mode", open=True, elem_id="nai_blend_section"):
                     blend_mode = gr.Radio(
                         ["Simple AND", "BREAK (Attention)", "Regional Blend (Horizontal)"],
                         label="Blend Mode",
@@ -668,22 +692,21 @@ def _on_ui_tabs():
                         outputs=[region_preview],
                     )
 
-                with gr.Accordion("🧩 LoRA", open=False, elem_id="nai_lora_section"):
+                with gr.Accordion("LoRA", open=False, elem_id="nai_lora_section"):
                     lora_names_list = []
                     lora_weights_list = []
                     lora_enableds_list = []
 
                     for i in range(4):
                         with gr.Row(elem_id=f"nai_lora_row_{i}"):
-                            lora_en = gr.Checkbox(label="On", value=False, scale=0, elem_id=f"nai_lora_en_{i}")
+                            lora_en = gr.Checkbox(label="On", value=False, elem_id=f"nai_lora_en_{i}")
                             lora_name = gr.Dropdown(
                                 choices=_get_lora_names(),
                                 label=f"LoRA {i + 1}",
                                 value=None,
-                                scale=3,
                                 elem_id=f"nai_lora_n_{i}",
                             )
-                            lora_wt = gr.Slider(label="Weight", minimum=-2.0, maximum=2.0, step=0.05, value=1.0, scale=1, elem_id=f"nai_lora_w_{i}")
+                            lora_wt = gr.Slider(label="Weight", minimum=-2.0, maximum=2.0, step=0.05, value=1.0, elem_id=f"nai_lora_w_{i}")
                             lora_names_list.append(lora_name)
                             lora_weights_list.append(lora_wt)
                             lora_enableds_list.append(lora_en)
@@ -692,31 +715,34 @@ def _on_ui_tabs():
                         names = _get_lora_names()
                         return [gr.Dropdown.update(choices=names) for _ in lora_names_list]
 
-                    refresh_btn = gr.Button("🔄 Refresh LoRA List", elem_id="nai_lora_refresh")
+                    refresh_btn = gr.Button("Refresh LoRA List", elem_id="nai_lora_refresh")
                     refresh_btn.click(fn=refresh_loras, outputs=lora_names_list)
 
             with gr.Column(scale=2, elem_id="nai_right_panel"):
-                generate_btn = gr.Button("🎨 Generate", variant="primary", elem_id="nai_gen_btn")
+                generate_btn = gr.Button("Generate", variant="primary", elem_id="nai_gen_btn")
 
                 gallery = gr.Gallery(
                     label="Output",
                     show_label=False,
                     elem_id="nai_gallery",
-                    columns=2,
-                    height=600,
                 )
                 info_text = gr.Textbox(label="Generation Info", lines=4, elem_id="nai_info")
 
         generate_btn.click(
             fn=_generate,
             inputs=[
-                char_prompts, char_weights, char_enableds, char_genders,
+                char_prompts[0], char_prompts[1], char_prompts[2], char_prompts[3],
+                char_weights[0], char_weights[1], char_weights[2], char_weights[3],
+                char_enableds[0], char_enableds[1], char_enableds[2], char_enableds[3],
+                char_genders[0], char_genders[1], char_genders[2], char_genders[3],
                 main_env, negative_prompt, blend_mode,
                 region_ratios, base_ratio, feather_width, calc_mode,
                 width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-                lora_names_list, lora_weights_list, lora_enableds_list,
+                lora_names_list[0], lora_names_list[1], lora_names_list[2], lora_names_list[3],
+                lora_weights_list[0], lora_weights_list[1], lora_weights_list[2], lora_weights_list[3],
+                lora_enableds_list[0], lora_enableds_list[1], lora_enableds_list[2], lora_enableds_list[3],
             ],
             outputs=[gallery, info_text],
         )
 
-    return (tab, "🎨 Multi-Subject", "nai_multi_subject_tab")
+    return (tab, "Multi-Subject", "nai_multi_subject_tab")
