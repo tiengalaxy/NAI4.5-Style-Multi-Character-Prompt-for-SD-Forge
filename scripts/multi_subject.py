@@ -388,15 +388,11 @@ class MultiSubjectEngine:
 
 class _MultiSubjectScript(scripts.Script):
     sorting_priority = 15
-    _tabs_registered = False
 
     def title(self):
         return "Multi-Subject Regional (Backend Hook)"
 
     def show(self, is_img2img):
-        if not _MultiSubjectScript._tabs_registered:
-            on_ui_tabs(_on_ui_tabs)
-            _MultiSubjectScript._tabs_registered = True
         return scripts.AlwaysVisible
 
     def ui(self, is_img2img):
@@ -590,7 +586,6 @@ def _on_ui_tabs():
                     char_genders = []
 
                     for i in range(4):
-                        color = REGION_COLORS[i]
                         label = f"Character {i + 1}" if i < 2 else f"Character {i + 1} (Optional)"
                         with gr.Accordion(label, open=(i < 2), elem_id=f"nai_char_acc_{i}"):
                             with gr.Row():
@@ -681,13 +676,20 @@ def _on_ui_tabs():
                             calc_mode = gr.Radio(["Attention", "Latent"], label="Calc Mode", value="Attention", elem_id="nai_calc")
                         region_preview = gr.HTML(value=_render_region_preview([1.0, 1.0]), elem_id="nai_rprev")
 
+                    def on_blend_change(mode):
+                        return gr.Group(visible=mode == "Regional Blend (Horizontal)")
+
                     blend_mode.change(
-                        fn=lambda mode: gr.Group.update(visible=mode == "Regional Blend (Horizontal)"),
+                        fn=on_blend_change,
                         inputs=[blend_mode],
                         outputs=[regional_options],
                     )
+
+                    def on_ratios_change(r):
+                        return gr.HTML(value=_render_region_preview(engine.parse_ratios(r, 4)))
+
                     region_ratios.change(
-                        fn=lambda r: gr.HTML.update(value=_render_region_preview(engine.parse_ratios(r, 4))),
+                        fn=on_ratios_change,
                         inputs=[region_ratios],
                         outputs=[region_preview],
                     )
@@ -713,7 +715,7 @@ def _on_ui_tabs():
 
                     def refresh_loras():
                         names = _get_lora_names()
-                        return [gr.Dropdown.update(choices=names) for _ in lora_names_list]
+                        return [gr.Dropdown(choices=names) for _ in lora_names_list]
 
                     refresh_btn = gr.Button("Refresh LoRA List", elem_id="nai_lora_refresh")
                     refresh_btn.click(fn=refresh_loras, outputs=lora_names_list)
@@ -746,3 +748,6 @@ def _on_ui_tabs():
         )
 
     return [(tab, "Multi-Subject", "nai_multi_subject_tab")]
+
+
+on_ui_tabs(_on_ui_tabs)
