@@ -536,17 +536,23 @@ def _generate(
         ratios = engine.parse_ratios(region_ratios, len(active_prompts))
         engine.setup_regional(active_prompts, env, ratios, base_ratio, feather_width, calc_mode)
 
+    outdir_samples = getattr(shared.cmd_opts, "outdir_txt2img_samples", None) or getattr(shared.cmd_opts, "outdir_txt2img", None) or "outputs/txt2img-images"
+    outdir_grids = getattr(shared.cmd_opts, "outdir_txt2img_grids", None) or getattr(shared.cmd_opts, "outdir_grids", None) or "outputs/txt2img-grids"
     p = StableDiffusionProcessingTxt2Img(
+        outpath_samples=outdir_samples,
+        outpath_grids=outdir_grids,
         sd_model=shared.sd_model,
         prompt=final_prompt,
         negative_prompt=neg,
-        steps=steps,
-        sampler_name=sampler_name,
-        cfg_scale=cfg_scale,
-        width=width,
-        height=height,
-        seed=int(seed) if seed is not None and int(seed) >= 0 else -1,
-        batch_size=batch_size,
+        steps=int(steps) if steps else 28,
+        sampler_name=sampler_name or "Euler a",
+        cfg_scale=float(cfg_scale) if cfg_scale else 7.0,
+        width=int(width) if width else 1024,
+        height=int(height) if height else 1024,
+        seed=int(seed) if seed is not None and str(seed).strip() not in ("", "None") and int(seed) >= 0 else -1,
+        batch_size=int(batch_size) if batch_size else 1,
+        do_not_save_grid=True,
+        n_iter=1,
     )
 
     try:
