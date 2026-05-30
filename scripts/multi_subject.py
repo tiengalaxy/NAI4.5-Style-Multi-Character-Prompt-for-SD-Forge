@@ -439,23 +439,86 @@ def _render_region_preview(ratios, active_count=None):
     return f'<svg width="{svg_width}" height="{svg_height}" xmlns="http://www.w3.org/2000/svg" style="border-radius:8px;display:block;margin:8px auto;">{"".join(rects)}{"".join(labels)}</svg>'
 
 
-def _setup_scripts(p, enable_adetailer=False):
+def _get_ad_model_list():
+    try:
+        from adetailer import get_models
+        from pathlib import Path
+        import modules.shared as shared_mod
+        models_path = getattr(shared_mod.cmd_opts, 'ckpt_dir', None)
+        ad_dir = Path(getattr(shared_mod.cmd_opts, 'adetailer_dir', Path(shared_mod.cmd_opts.datadir if hasattr(shared_mod.cmd_opts, 'datadir') else '.', 'models', 'adetailer')))
+        if not ad_dir.exists():
+            for candidate in [Path('models/adetailer'), Path(shared_mod.cmd_opts.datadir if hasattr(shared_mod.cmd_opts, 'datadir') else '.', 'models/adetailer')]:
+                if candidate.exists():
+                    ad_dir = candidate
+                    break
+        model_mapping = get_models(ad_dir, huggingface=False)
+        return list(model_mapping.keys())
+    except Exception:
+        return []
+
+
+def _setup_scripts(p, ad_params=None):
     try:
         p.scripts = scripts.scripts_txt2img
         p.is_api = True
-        if enable_adetailer:
-            runner = scripts.scripts_txt2img
-            max_idx = 0
-            adetailer_script = None
-            for s in runner.alwayson_scripts:
-                if s.args_to is not None:
-                    max_idx = max(max_idx, s.args_to)
-                if adetailer_script is None and "detailer" in s.title().lower():
-                    adetailer_script = s
-            if adetailer_script and max_idx > 0:
-                args = [None] * max_idx
-                args[adetailer_script.args_from] = True
-                p.script_args = args
+        if not ad_params or not ad_params.get("enable", False):
+            return
+        runner = scripts.scripts_txt2img
+        ad_script = None
+        max_idx = 0
+        for s in runner.alwayson_scripts:
+            if s.args_to is not None:
+                max_idx = max(max_idx, s.args_to)
+            if ad_script is None and "detailer" in s.title().lower():
+                ad_script = s
+        if not ad_script or max_idx <= 0:
+            return
+        num_models = getattr(shared.opts, 'ad_max_models', 2)
+        first_dict = {
+            "ad_model": ad_params.get("model", "face_yolov8n.pt"),
+            "ad_prompt": ad_params.get("prompt", ""),
+            "ad_negative_prompt": ad_params.get("negative_prompt", ""),
+            "ad_confidence": ad_params.get("confidence", 0.3),
+            "ad_mask_k_largest": 0,
+            "ad_mask_min_ratio": 0.0,
+            "ad_mask_max_ratio": 1.0,
+            "ad_x_offset": 0,
+            "ad_y_offset": 0,
+            "ad_dilate_erode": ad_params.get("dilate_erode", 4),
+            "ad_mask_merge_invert": "None",
+            "ad_mask_blur": ad_params.get("mask_blur", 4),
+            "ad_denoising_strength": ad_params.get("denoising_strength", 0.4),
+            "ad_inpaint_only_masked": ad_params.get("inpaint_only_masked", True),
+            "ad_inpaint_only_masked_padding": ad_params.get("inpaint_padding", 32),
+            "ad_use_inpaint_width_height": False,
+            "ad_inpaint_width": 512,
+            "ad_inpaint_height": 512,
+            "ad_use_steps": False,
+            "ad_steps": 28,
+            "ad_use_cfg_scale": False,
+            "ad_cfg_scale": 7.0,
+            "ad_use_sampler": False,
+            "ad_sampler": "DPM++ 2M Karras",
+            "ad_use_noise_multiplier": False,
+            "ad_noise_multiplier": 1.0,
+            "ad_use_clip_skip": False,
+            "ad_clip_skip": 1,
+            "ad_restore_face": False,
+            "ad_controlnet_model": "None",
+            "ad_controlnet_module": None,
+            "ad_controlnet_weight": 1.0,
+            "ad_controlnet_guidance_start": 0.0,
+            "ad_controlnet_guidance_end": 1.0,
+            "is_api": True,
+        }
+        args = [None] * max_idx
+        args[ad_script.args_from] = True
+        args[ad_script.args_from + 1] = first_dict
+        for i in range(1, num_models):
+            idx = ad_script.args_from + 1 + i
+            if idx < max_idx:
+                args[idx] = {"ad_model": "None", "is_api": True}
+        p.script_args = args
     except Exception:
         pass
 
@@ -468,7 +531,9 @@ def _generate(
     main_env, negative_prompt, blend_mode,
     region_ratios, base_ratio, feather_width, calc_mode,
     width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-    enable_adetailer,
+    ad_enable, ad_model, ad_prompt, ad_negative_prompt,
+    ad_confidence, ad_denoising_strength, ad_mask_blur,
+    ad_dilate_erode, ad_inpaint_only_masked, ad_inpaint_padding,
 ):
     char_prompts = [cp0, cp1, cp2, cp3]
     char_weights = [cw0, cw1, cw2, cw3]
@@ -542,7 +607,19 @@ def _generate(
         n_iter=1,
     )
 
-    _setup_scripts(p, enable_adetailer)
+    ad_params = {
+        "enable": ad_enable,
+        "model": ad_model,
+        "prompt": ad_prompt if ad_prompt else "",
+        "negative_prompt": ad_negative_prompt if ad_negative_prompt else "",
+        "confidence": ad_confidence,
+        "denoising_strength": ad_denoising_strength,
+        "mask_blur": ad_mask_blur,
+        "dilate_erode": ad_dilate_erode,
+        "inpaint_only_masked": ad_inpaint_only_masked,
+        "inpaint_padding": ad_inpaint_padding,
+    }
+    _setup_scripts(p, ad_params)
 
     try:
         processed = process_images(p)
@@ -689,11 +766,62 @@ def _on_ui_tabs():
                         outputs=[region_preview],
                     )
 
-                with gr.Accordion("Post-Processing", open=False, elem_id="nai_post_section"):
-                    enable_adetailer = gr.Checkbox(
+                with gr.Accordion("ADetailer", open=False, elem_id="nai_ad_section"):
+                    ad_enable = gr.Checkbox(
                         label="Enable ADetailer (face/hand repair)",
                         value=False,
-                        elem_id="nai_adetailer_en",
+                        elem_id="nai_ad_en",
+                    )
+                    with gr.Row():
+                        ad_model = gr.Dropdown(
+                            label="Detection Model",
+                            choices=_get_ad_model_list(),
+                            value="face_yolov8n.pt",
+                            elem_id="nai_ad_model",
+                        )
+                        ad_confidence = gr.Slider(
+                            label="Detection Confidence",
+                            minimum=0.0, maximum=1.0, step=0.01, value=0.3,
+                            elem_id="nai_ad_conf",
+                        )
+                    with gr.Row():
+                        ad_denoising_strength = gr.Slider(
+                            label="Denoising Strength",
+                            minimum=0.0, maximum=1.0, step=0.01, value=0.4,
+                            elem_id="nai_ad_ds",
+                        )
+                        ad_mask_blur = gr.Slider(
+                            label="Mask Blur",
+                            minimum=0, maximum=64, step=1, value=4,
+                            elem_id="nai_ad_mb",
+                        )
+                    with gr.Row():
+                        ad_dilate_erode = gr.Slider(
+                            label="Dilate/Erode (-128~128)",
+                            minimum=-128, maximum=128, step=4, value=4,
+                            elem_id="nai_ad_de",
+                        )
+                        ad_inpaint_padding = gr.Slider(
+                            label="Inpaint Padding",
+                            minimum=0, maximum=256, step=4, value=32,
+                            elem_id="nai_ad_ip",
+                        )
+                    ad_inpaint_only_masked = gr.Checkbox(
+                        label="Inpaint Only Masked",
+                        value=True,
+                        elem_id="nai_ad_iom",
+                    )
+                    ad_prompt = gr.Textbox(
+                        label="ADetailer Prompt (blank = use main prompt)",
+                        placeholder="e.g., detailed face, beautiful eyes",
+                        lines=2,
+                        elem_id="nai_ad_p",
+                    )
+                    ad_negative_prompt = gr.Textbox(
+                        label="ADetailer Negative Prompt",
+                        placeholder="e.g., bad face, deformed",
+                        lines=2,
+                        elem_id="nai_ad_np",
                     )
 
             with gr.Column(scale=2, elem_id="nai_right_panel"):
@@ -716,7 +844,9 @@ def _on_ui_tabs():
                 main_env, negative_prompt, blend_mode,
                 region_ratios, base_ratio, feather_width, calc_mode,
                 width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-                enable_adetailer,
+                ad_enable, ad_model, ad_prompt, ad_negative_prompt,
+                ad_confidence, ad_denoising_strength, ad_mask_blur,
+                ad_dilate_erode, ad_inpaint_only_masked, ad_inpaint_padding,
             ],
             outputs=[gallery, info_text],
         )
