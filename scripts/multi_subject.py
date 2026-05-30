@@ -130,18 +130,38 @@ class MultiSubjectEngine:
             return prompt
         return f"({prompt}:{weight:.2f})"
 
+    @staticmethod
+    def _extract_extra_networks(text):
+        import re
+        if not text:
+            return [], text
+        pattern = r'(<(?:lora|lyco|hypernet|embedding):[^>]+>)'
+        tags = re.findall(pattern, text)
+        cleaned = re.sub(pattern, '', text).strip()
+        cleaned = re.sub(r',\s*,', ',', cleaned)
+        cleaned = cleaned.strip().strip(',').strip()
+        return tags, cleaned
+
     def build_final_prompt(self, active_prompts, env, blend_mode):
+        extra_tags = []
+        clean_env = env
+        if env:
+            extra_tags, clean_env = self._extract_extra_networks(env)
         combined = []
         for prompt in active_prompts:
             parts = [prompt]
-            if env:
-                parts.append(env)
+            if clean_env:
+                parts.append(clean_env)
             combined.append(" ".join(parts))
         if blend_mode == "Simple AND":
-            return " AND ".join(combined)
+            body = " AND ".join(combined)
         elif blend_mode in ("BREAK (Attention)", "Regional Blend (Horizontal)"):
-            return " BREAK ".join(combined)
-        return " AND ".join(combined)
+            body = " BREAK ".join(combined)
+        else:
+            body = " AND ".join(combined)
+        if extra_tags:
+            return " ".join(extra_tags) + " " + body
+        return body
 
     def setup_regional(self, prompts, env, ratios, base_ratio, feather_width, calc_mode):
         self._regional_data = {
