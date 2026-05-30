@@ -539,6 +539,31 @@ def _get_cn_models():
     return ["None"] + found if found else ["None"]
 
 
+def _get_checkpoint_list():
+    try:
+        import modules.sd_models
+        checkpoints = modules.sd_models.checkpoint_tiles(use_short=True)
+        return ["Use same checkpoint"] + checkpoints
+    except Exception:
+        return ["Use same checkpoint"]
+
+
+def _interrupt():
+    shared.state.interrupt()
+
+
+def _skip():
+    shared.state.skip()
+
+
+def _on_generate_start():
+    return gr.Button(visible=False), gr.Button(visible=True), gr.Button(visible=True)
+
+
+def _on_generate_end():
+    return gr.Button(visible=True), gr.Button(visible=False), gr.Button(visible=False)
+
+
 def _build_ad_unit(d):
     unit_dict = {
         "ad_model": d.get("model", "face_yolov8n.pt"),
@@ -658,6 +683,7 @@ def _generate(
     main_env, negative_prompt, blend_mode,
     region_ratios, base_ratio, feather_width, calc_mode,
     width, height, steps, cfg_scale, sampler_name, seed, batch_size,
+    checkpoint_name,
     ad1_enable, ad1_model, ad1_prompt, ad1_neg, ad1_conf, ad1_k, ad1_min_r, ad1_max_r,
     ad1_x_off, ad1_y_off, ad1_dilate, ad1_merge, ad1_mask_blur, ad1_ds,
     ad1_iom, ad1_iom_pad, ad1_use_wh, ad1_iw, ad1_ih,
@@ -674,6 +700,14 @@ def _generate(
 
     engine = MultiSubjectEngine.get()
     engine.cleanup()
+
+    if checkpoint_name and checkpoint_name != "Use same checkpoint":
+        try:
+            import modules.sd_models
+            shared.opts.sd_model_checkpoint = checkpoint_name
+            modules.sd_models.reload_model_weights()
+        except Exception:
+            pass
 
     active_prompts = []
     girls_count = 0
@@ -1026,6 +1060,12 @@ def _on_ui_tabs():
 
             with gr.Column(scale=1, elem_id="nai_center_panel"):
                 with gr.Accordion("Generation", open=True, elem_id="nai_gen_section"):
+                    checkpoint_name = gr.Dropdown(
+                        label="Checkpoint (model)",
+                        choices=_get_checkpoint_list(),
+                        value="Use same checkpoint",
+                        elem_id="nai_checkpoint",
+                    )
                     with gr.Row():
                         width = gr.Slider(label="Width", minimum=256, maximum=2048, step=64, value=1024, elem_id="nai_w")
                         height = gr.Slider(label="Height", minimum=256, maximum=2048, step=64, value=1024, elem_id="nai_h")
@@ -1091,7 +1131,15 @@ def _on_ui_tabs():
                     )
 
             with gr.Column(scale=2, elem_id="nai_right_panel"):
-                generate_btn = gr.Button("Generate", variant="primary", elem_id="nai_gen_btn")
+                with gr.Row(elem_id="nai_btn_row"):
+                    generate_btn = gr.Button("Generate", variant="primary", elem_id="nai_gen_btn")
+                    interrupt_btn = gr.Button("Interrupt", variant="stop", visible=False, elem_id="nai_interrupt_btn")
+                    skip_btn = gr.Button("Skip", visible=False, elem_id="nai_skip_btn")
+
+                preview_html = gr.HTML(
+                    value='<div id="nai_preview_container" style="display:none;text-align:center;padding:8px;"><img id="nai_preview_img" style="max-width:100%;border-radius:8px;" src=""/><p id="nai_preview_progress" style="color:#888;font-size:12px;margin-top:4px;"></p></div>',
+                    elem_id="nai_preview_html",
+                )
 
                 gallery = gr.Gallery(
                     label="Output",
@@ -1109,22 +1157,36 @@ def _on_ui_tabs():
         ad2_keys = ['ad2_model', 'ad2_prompt', 'ad2_neg', 'ad2_conf',
                      'ad2_mask_blur', 'ad2_ds', 'ad2_iom', 'ad2_iom_pad', 'ad2_dilate']
 
+        interrupt_btn.click(fn=_interrupt, inputs=[], outputs=[])
+        skip_btn.click(fn=_skip, inputs=[], outputs=[])
+
+        gen_inputs = [
+            char_prompts[0], char_prompts[1], char_prompts[2], char_prompts[3],
+            char_weights[0], char_weights[1], char_weights[2], char_weights[3],
+            char_enableds[0], char_enableds[1], char_enableds[2], char_enableds[3],
+            char_genders[0], char_genders[1], char_genders[2], char_genders[3],
+            main_env, negative_prompt, blend_mode,
+            region_ratios, base_ratio, feather_width, calc_mode,
+            width, height, steps, cfg_scale, sampler_name, seed, batch_size,
+            checkpoint_name,
+            ad1_enable,
+            *[ad1[k] for k in ad1_keys],
+            ad2_enable,
+            *[ad2[k] for k in ad2_keys],
+        ]
+
         generate_btn.click(
+            fn=_on_generate_start,
+            inputs=[],
+            outputs=[generate_btn, interrupt_btn, skip_btn],
+        ).then(
             fn=_generate,
-            inputs=[
-                char_prompts[0], char_prompts[1], char_prompts[2], char_prompts[3],
-                char_weights[0], char_weights[1], char_weights[2], char_weights[3],
-                char_enableds[0], char_enableds[1], char_enableds[2], char_enableds[3],
-                char_genders[0], char_genders[1], char_genders[2], char_genders[3],
-                main_env, negative_prompt, blend_mode,
-                region_ratios, base_ratio, feather_width, calc_mode,
-                width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-                ad1_enable,
-                *[ad1[k] for k in ad1_keys],
-                ad2_enable,
-                *[ad2[k] for k in ad2_keys],
-            ],
+            inputs=gen_inputs,
             outputs=[gallery, info_text],
+        ).then(
+            fn=_on_generate_end,
+            inputs=[],
+            outputs=[generate_btn, interrupt_btn, skip_btn],
         )
 
     return [(tab, "Multi-Subject", "nai_multi_subject_tab")]
