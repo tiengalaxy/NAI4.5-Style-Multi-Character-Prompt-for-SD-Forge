@@ -441,28 +441,82 @@ def _render_region_preview(ratios, active_count=None):
 
 
 def _get_ad_model_list():
+    import os
+    from pathlib import Path
+    ad_dirs = []
+    try:
+        from modules.paths import models_path
+        ad_dirs.append(Path(models_path) / 'adetailer')
+    except Exception:
+        pass
+    data_dir = getattr(shared.cmd_opts, 'datadir', None)
+    if data_dir:
+        ad_dirs.append(Path(data_dir) / 'models' / 'adetailer')
+    ad_dirs.append(Path(shared.cmd_opts.datadir if hasattr(shared.cmd_opts, 'datadir') else '.') / 'models' / 'adetailer')
+    script_dir = Path(__file__).resolve().parent.parent.parent
+    ad_dirs.append(script_dir / 'models' / 'adetailer')
+    for d in list(ad_dirs):
+        ad_dirs.append(d.resolve())
+    seen = set()
+    unique_dirs = []
+    for d in ad_dirs:
+        r = str(d)
+        if r not in seen:
+            seen.add(r)
+            unique_dirs.append(d)
     try:
         from adetailer import get_models
-        from pathlib import Path
-        ad_dir = Path('models/adetailer')
-        if not ad_dir.exists():
-            data_dir = getattr(shared.cmd_opts, 'datadir', None)
-            if data_dir:
-                candidate = Path(data_dir) / 'models' / 'adetailer'
-                if candidate.exists():
-                    ad_dir = candidate
-        model_mapping = get_models(ad_dir, huggingface=False)
-        return list(model_mapping.keys())
+        for ad_dir in unique_dirs:
+            if ad_dir.exists():
+                model_mapping = get_models(ad_dir, huggingface=False)
+                if model_mapping:
+                    return list(model_mapping.keys())
     except Exception:
-        return []
+        pass
+    found = []
+    for ad_dir in unique_dirs:
+        if not ad_dir.exists():
+            continue
+        for f in sorted(os.listdir(ad_dir)):
+            if f.endswith(('.pt', '.pth', '.safetensors', '.onnx')):
+                name = os.path.splitext(f)[0]
+                if name not in found:
+                    found.append(name)
+    return found
 
 
 def _get_cn_models():
+    import os
+    from pathlib import Path
     try:
         from controlnet_ext import get_cn_models
-        return ["None"] + get_cn_models()
+        models = get_cn_models()
+        if models:
+            return ["None"] + models
     except Exception:
-        return ["None"]
+        pass
+    cn_dirs = []
+    try:
+        from modules.paths import models_path
+        cn_dirs.append(Path(models_path) / 'ControlNet')
+        cn_dirs.append(Path(models_path) / 'controlnet')
+    except Exception:
+        pass
+    data_dir = getattr(shared.cmd_opts, 'datadir', None)
+    if data_dir:
+        cn_dirs.append(Path(data_dir) / 'models' / 'ControlNet')
+    script_dir = Path(__file__).resolve().parent.parent.parent
+    cn_dirs.append(script_dir / 'models' / 'ControlNet')
+    found = []
+    for cn_dir in cn_dirs:
+        if not cn_dir.exists():
+            continue
+        for f in sorted(os.listdir(cn_dir)):
+            if f.endswith(('.safetensors', '.pt', '.pth', '.ckpt', '.bin')):
+                name = os.path.splitext(f)[0]
+                if name not in found:
+                    found.append(name)
+    return ["None"] + found if found else ["None"]
 
 
 def _build_ad_dict(d):
