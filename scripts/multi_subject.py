@@ -559,37 +559,61 @@ def _build_ad_dict(d):
     }
 
 
+class _ScriptProxy:
+    def __init__(self, script, new_from, new_to):
+        object.__setattr__(self, '_wrapped', script)
+        object.__setattr__(self, 'args_from', new_from)
+        object.__setattr__(self, 'args_to', new_to)
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def __setattr__(self, name, value):
+        if name in ('_wrapped', 'args_from', 'args_to'):
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._wrapped, name, value)
+
+
 def _setup_scripts(p, ad1=None, ad2=None):
     try:
-        p.scripts = scripts.scripts_txt2img
-        p.is_api = True
         enabled = (ad1 and ad1.get("enable", False)) or (ad2 and ad2.get("enable", False))
         if not enabled:
             return
-        runner = scripts.scripts_txt2img
+        from copy import copy as shallow_copy
+        original = scripts.scripts_txt2img
         ad_script = None
-        max_idx = 0
-        for s in runner.alwayson_scripts:
-            if s.args_to is not None:
-                max_idx = max(max_idx, s.args_to)
-            if ad_script is None and "detailer" in s.title().lower():
+        for s in original.alwayson_scripts:
+            if "detailer" in s.title().lower():
                 ad_script = s
-        if not ad_script or max_idx <= 0:
+                break
+        if not ad_script:
             return
-        num_models = getattr(shared.opts, 'ad_max_models', 2)
-        args = [None] * max_idx
-        args[ad_script.args_from] = True
+        ad_num_args = ad_script.args_to - ad_script.args_from
+        if ad_num_args <= 0:
+            return
+        proxy = _ScriptProxy(ad_script, 0, ad_num_args)
+        runner = shallow_copy(original)
+        runner.alwayson_scripts = [proxy]
+        runner.selectable_scripts = []
+        p.scripts = runner
+        p.is_api = True
+        args = [None] * ad_num_args
         if ad1 and ad1.get("enable", False):
-            args[ad_script.args_from + 1] = _build_ad_dict(ad1)
+            args[0] = True
+            args[1] = _build_ad_dict(ad1)
+            num_models = getattr(shared.opts, 'ad_max_models', 2)
+            for i in range(1, num_models):
+                idx = 1 + i
+                if idx < ad_num_args:
+                    if i == 1 and ad2 and ad2.get("enable", False):
+                        args[idx] = _build_ad_dict(ad2)
+                    else:
+                        args[idx] = {"ad_model": "None", "is_api": True}
         else:
-            args[ad_script.args_from + 1] = {"ad_model": "None", "is_api": True}
-        for i in range(1, num_models):
-            idx = ad_script.args_from + 1 + i
-            if idx < max_idx:
-                if i == 1 and ad2 and ad2.get("enable", False):
-                    args[idx] = _build_ad_dict(ad2)
-                else:
-                    args[idx] = {"ad_model": "None", "is_api": True}
+            args[0] = False
+            if ad_num_args > 1:
+                args[1] = {"ad_model": "None", "is_api": True}
         p.script_args = args
     except Exception:
         pass
@@ -709,6 +733,9 @@ def _generate(
         "inpaint_only_masked": ad2_iom, "inpaint_padding": ad2_iom_pad,
         "dilate_erode": ad2_dilate,
     }
+    if blend_mode == "Regional Blend (Horizontal)":
+        engine.apply_regional_to_processing(p)
+
     _setup_scripts(p, ad1_params, ad2_params)
 
     try:
