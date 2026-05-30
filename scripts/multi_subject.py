@@ -408,24 +408,6 @@ class _MultiSubjectScript(scripts.Script):
         engine.cleanup()
 
 
-def _get_lora_names():
-    try:
-        lora_dir = shared.cmd_opts.lora_dir if hasattr(shared.cmd_opts, 'lora_dir') else None
-        if not lora_dir:
-            return []
-        import os
-        names = []
-        for f in sorted(os.listdir(lora_dir)):
-            full = os.path.join(lora_dir, f)
-            if os.path.isdir(full):
-                names.append(f)
-            elif f.endswith(('.safetensors', '.pt', '.ckpt', '.bin')):
-                names.append(os.path.splitext(f)[0])
-        return names
-    except Exception:
-        return []
-
-
 def _get_sampler_names():
     try:
         return [s.name for s in samplers]
@@ -457,6 +439,27 @@ def _render_region_preview(ratios, active_count=None):
     return f'<svg width="{svg_width}" height="{svg_height}" xmlns="http://www.w3.org/2000/svg" style="border-radius:8px;display:block;margin:8px auto;">{"".join(rects)}{"".join(labels)}</svg>'
 
 
+def _setup_scripts(p, enable_adetailer=False):
+    try:
+        p.scripts = scripts.scripts_txt2img
+        p.is_api = True
+        if enable_adetailer:
+            runner = scripts.scripts_txt2img
+            max_idx = 0
+            adetailer_script = None
+            for s in runner.alwayson_scripts:
+                if s.args_to is not None:
+                    max_idx = max(max_idx, s.args_to)
+                if adetailer_script is None and "detailer" in s.title().lower():
+                    adetailer_script = s
+            if adetailer_script and max_idx > 0:
+                args = [None] * max_idx
+                args[adetailer_script.args_from] = True
+                p.script_args = args
+    except Exception:
+        pass
+
+
 def _generate(
     cp0, cp1, cp2, cp3,
     cw0, cw1, cw2, cw3,
@@ -465,17 +468,12 @@ def _generate(
     main_env, negative_prompt, blend_mode,
     region_ratios, base_ratio, feather_width, calc_mode,
     width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-    ln0, ln1, ln2, ln3,
-    lw0, lw1, lw2, lw3,
-    le0, le1, le2, le3,
+    enable_adetailer,
 ):
     char_prompts = [cp0, cp1, cp2, cp3]
     char_weights = [cw0, cw1, cw2, cw3]
     char_enableds = [ce0, ce1, ce2, ce3]
     char_genders = [cg0, cg1, cg2, cg3]
-    lora_names = [ln0, ln1, ln2, ln3]
-    lora_weights = [lw0, lw1, lw2, lw3]
-    lora_enableds = [le0, le1, le2, le3]
 
     engine = MultiSubjectEngine.get()
     engine.cleanup()
@@ -511,14 +509,6 @@ def _generate(
 
     env = main_env.strip() if main_env else ""
 
-    lora_tags = []
-    for i, name in enumerate(lora_names):
-        w = lora_weights[i] if i < len(lora_weights) else 1.0
-        en = lora_enableds[i] if i < len(lora_enableds) else False
-        if en and name and name.strip():
-            lora_tags.append(f"<lora:{name.strip()}:{w:.2f}>")
-    lora_str = " ".join(lora_tags)
-
     final_prompt = engine.build_final_prompt(active_prompts, env, blend_mode)
 
     prompt_parts = []
@@ -526,9 +516,6 @@ def _generate(
         prompt_parts.append(count_str)
     prompt_parts.append(final_prompt)
     final_prompt = ", ".join(prompt_parts)
-
-    if lora_str:
-        final_prompt = f"{lora_str} {final_prompt}"
 
     neg = negative_prompt.strip() if negative_prompt else ""
 
@@ -554,6 +541,8 @@ def _generate(
         do_not_save_grid=True,
         n_iter=1,
     )
+
+    _setup_scripts(p, enable_adetailer)
 
     try:
         processed = process_images(p)
@@ -700,31 +689,12 @@ def _on_ui_tabs():
                         outputs=[region_preview],
                     )
 
-                with gr.Accordion("LoRA", open=False, elem_id="nai_lora_section"):
-                    lora_names_list = []
-                    lora_weights_list = []
-                    lora_enableds_list = []
-
-                    for i in range(4):
-                        with gr.Row(elem_id=f"nai_lora_row_{i}"):
-                            lora_en = gr.Checkbox(label="On", value=False, elem_id=f"nai_lora_en_{i}")
-                            lora_name = gr.Dropdown(
-                                choices=_get_lora_names(),
-                                label=f"LoRA {i + 1}",
-                                value=None,
-                                elem_id=f"nai_lora_n_{i}",
-                            )
-                            lora_wt = gr.Slider(label="Weight", minimum=-2.0, maximum=2.0, step=0.05, value=1.0, elem_id=f"nai_lora_w_{i}")
-                            lora_names_list.append(lora_name)
-                            lora_weights_list.append(lora_wt)
-                            lora_enableds_list.append(lora_en)
-
-                    def refresh_loras():
-                        names = _get_lora_names()
-                        return [gr.Dropdown(choices=names) for _ in lora_names_list]
-
-                    refresh_btn = gr.Button("Refresh LoRA List", elem_id="nai_lora_refresh")
-                    refresh_btn.click(fn=refresh_loras, outputs=lora_names_list)
+                with gr.Accordion("Post-Processing", open=False, elem_id="nai_post_section"):
+                    enable_adetailer = gr.Checkbox(
+                        label="Enable ADetailer (face/hand repair)",
+                        value=False,
+                        elem_id="nai_adetailer_en",
+                    )
 
             with gr.Column(scale=2, elem_id="nai_right_panel"):
                 generate_btn = gr.Button("Generate", variant="primary", elem_id="nai_gen_btn")
@@ -746,9 +716,7 @@ def _on_ui_tabs():
                 main_env, negative_prompt, blend_mode,
                 region_ratios, base_ratio, feather_width, calc_mode,
                 width, height, steps, cfg_scale, sampler_name, seed, batch_size,
-                lora_names_list[0], lora_names_list[1], lora_names_list[2], lora_names_list[3],
-                lora_weights_list[0], lora_weights_list[1], lora_weights_list[2], lora_weights_list[3],
-                lora_enableds_list[0], lora_enableds_list[1], lora_enableds_list[2], lora_enableds_list[3],
+                enable_adetailer,
             ],
             outputs=[gallery, info_text],
         )
