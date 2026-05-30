@@ -593,7 +593,6 @@ def _on_ui_tabs():
                                                 choices=cat_data["tags"],
                                                 label=f"Select {cat_data['label']}",
                                                 multiselect=True,
-                                                allow_custom_value=False,
                                                 elem_id=f"nai_tag_dd_{i}_{cat_key}",
                                             )
                                             tag_dd.change(
