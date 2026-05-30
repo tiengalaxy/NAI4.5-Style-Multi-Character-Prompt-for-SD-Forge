@@ -519,8 +519,8 @@ def _get_cn_models():
     return ["None"] + found if found else ["None"]
 
 
-def _build_ad_dict(d):
-    return {
+def _build_ad_unit(d):
+    unit_dict = {
         "ad_model": d.get("model", "face_yolov8n.pt"),
         "ad_prompt": d.get("prompt", ""),
         "ad_negative_prompt": d.get("negative_prompt", ""),
@@ -551,12 +551,23 @@ def _build_ad_dict(d):
         "ad_clip_skip": d.get("clip_skip", 1),
         "ad_restore_face": d.get("restore_face", False),
         "ad_controlnet_model": d.get("cn_model", "None"),
-        "ad_controlnet_module": d.get("cn_module", None),
+        "ad_controlnet_module": d.get("cn_module", "None"),
         "ad_controlnet_weight": d.get("cn_weight", 1.0),
         "ad_controlnet_guidance_start": d.get("cn_guidance_start", 0.0),
         "ad_controlnet_guidance_end": d.get("cn_guidance_end", 1.0),
         "is_api": True,
     }
+    try:
+        from lib_adetailer.process import ADetailerUnit
+        return ADetailerUnit(**unit_dict)
+    except (ImportError, TypeError):
+        pass
+    try:
+        from adetailer.args import ADetailerArgs
+        return ADetailerArgs(**unit_dict)
+    except (ImportError, TypeError):
+        pass
+    return unit_dict
 
 
 class _ScriptProxy:
@@ -601,19 +612,19 @@ def _setup_scripts(p, ad1=None, ad2=None):
         args = [None] * ad_num_args
         if ad1 and ad1.get("enable", False):
             args[0] = True
-            args[1] = _build_ad_dict(ad1)
+            args[1] = _build_ad_unit(ad1)
             num_models = getattr(shared.opts, 'ad_max_models', 2)
             for i in range(1, num_models):
                 idx = 1 + i
                 if idx < ad_num_args:
                     if i == 1 and ad2 and ad2.get("enable", False):
-                        args[idx] = _build_ad_dict(ad2)
+                        args[idx] = _build_ad_unit(ad2)
                     else:
-                        args[idx] = {"ad_model": "None", "is_api": True}
+                        args[idx] = _build_ad_unit({"model": "None"})
         else:
             args[0] = False
             if ad_num_args > 1:
-                args[1] = {"ad_model": "None", "is_api": True}
+                args[1] = _build_ad_unit({"model": "None"})
         p.script_args = args
     except Exception:
         pass
@@ -1019,7 +1030,7 @@ def _on_ui_tabs():
                         value="Simple AND",
                         elem_id="nai_blend",
                     )
-                    with gr.Group(visible=False, elem_id="nai_regional_group") as regional_options:
+                    with gr.Column(visible=False, elem_id="nai_regional_group") as regional_options:
                         with gr.Row():
                             region_ratios = gr.Textbox(label="Region Ratios", placeholder="e.g., 1,1 or 2,1", value="1,1", elem_id="nai_ratios")
                             base_ratio = gr.Slider(label="Base Ratio", minimum=0.0, maximum=1.0, step=0.05, value=0.3, elem_id="nai_base_r")
