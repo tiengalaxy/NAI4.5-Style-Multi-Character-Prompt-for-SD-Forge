@@ -745,4 +745,4 @@ def _on_ui_tabs():
             outputs=[gallery, info_text],
         )
 
-    return (tab, "Multi-Subject", "nai_multi_subject_tab")
+    return [(tab, "Multi-Subject", "nai_multi_subject_tab")]
