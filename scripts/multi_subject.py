@@ -689,8 +689,11 @@ def _generate(
         ratios = engine.parse_ratios(region_ratios, len(active_prompts))
         engine.setup_regional(active_prompts, env, ratios, base_ratio, feather_width, calc_mode)
 
-    outdir_samples = getattr(shared.cmd_opts, "outdir_txt2img_samples", None) or getattr(shared.cmd_opts, "outdir_txt2img", None) or "outputs/txt2img-images"
-    outdir_grids = getattr(shared.cmd_opts, "outdir_txt2img_grids", None) or getattr(shared.cmd_opts, "outdir_grids", None) or "outputs/txt2img-grids"
+    outdir_samples = getattr(shared.opts, "outdir_samples", None) or getattr(shared.opts, "outdir_txt2img_samples", None) or getattr(shared.cmd_opts, "outdir_txt2img_samples", None) or getattr(shared.cmd_opts, "outdir_txt2img", None) or "outputs/txt2img-images"
+    outdir_grids = getattr(shared.opts, "outdir_grids", None) or getattr(shared.opts, "outdir_txt2img_grids", None) or getattr(shared.cmd_opts, "outdir_txt2img_grids", None) or getattr(shared.cmd_opts, "outdir_grids", None) or "outputs/txt2img-grids"
+    import os
+    os.makedirs(outdir_samples, exist_ok=True)
+    os.makedirs(outdir_grids, exist_ok=True)
     p = StableDiffusionProcessingTxt2Img(
         outpath_samples=outdir_samples,
         outpath_grids=outdir_grids,
@@ -738,8 +741,10 @@ def _generate(
 
     _setup_scripts(p, ad1_params, ad2_params)
 
+    from contextlib import closing
     try:
-        processed = process_images(p)
+        with closing(p):
+            processed = process_images(p)
     except Exception as e:
         engine.cleanup()
         return [], f"Generation error: {str(e)}"
